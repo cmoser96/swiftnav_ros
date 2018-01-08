@@ -1,12 +1,17 @@
 #include "swiftnav_ros/swiftnav_ros_driver.h"
 #include <libsbp/system.h>
 #include <libsbp/navigation.h>
+#include <libsbp/imu.h>
+#include <libsbp/mag.h>
 
+#include <math.h>
 #include <iomanip>
 
 #include <sensor_msgs/NavSatFix.h>
 #include <sensor_msgs/NavSatStatus.h>
 #include <sensor_msgs/TimeReference.h>
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/MagneticField.h>
 #include <ros/time.h>
 #include <tf/tf.h>
 
@@ -112,10 +117,15 @@ namespace swiftnav_ros
         sbp_register_callback(&state, SBP_MSG_BASELINE_NED, &baseline_ned_callback, (void*) this, &baseline_ned_callback_node);
 //		sbp_register_callback(&state, SBP_VEL_ECEF, &vel_ecefCallback, (void*) this, &vel_ecef_callback_node);
 		sbp_register_callback(&state, SBP_MSG_VEL_NED, &vel_ned_callback, (void*) this, &vel_ned_callback_node);
+		sbp_register_callback(&state, SBP_MSG_IMU_RAW, &imu_raw_callback, (void*) this, &imu_raw_callback_node);
+		sbp_register_callback(&state, SBP_MSG_MAG_RAW, &mag_raw_callback, (void*) this, &mag_raw_callback_node);
+
 
 		llh_pub = nh.advertise<sensor_msgs::NavSatFix>( "gps/fix", 1 );
 		rtk_pub = nh.advertise<nav_msgs::Odometry>( "gps/rtkfix", 1 );
 		time_pub = nh.advertise<sensor_msgs::TimeReference>( "gps/time", 1 );
+		imu_pub = nh.advertise<sensor_msgs::Imu>("gps/imu", 1);
+		mag_pub = nh.advertise<sensor_msgs::MagneticField>("gps/mag", 1);
 
 		return true;
 	}
@@ -342,6 +352,65 @@ void vel_ned_callback(u16 sender_id, u8 len, u8 msg[], void *context)
         driver->rtk_vel_up = -sbp_vel.d/1000.0;
         driver->rtk_vel_h_covariance = (sbp_vel.h_accuracy * sbp_vel.h_accuracy) * 10e-6;
         driver->rtk_vel_v_covariance = (sbp_vel.v_accuracy * sbp_vel.h_accuracy) * 10e-6;
+
+		return;
+	}
+
+	void imu_raw_callback(u16 sender_id, u8 len, u8 msg[], void *context)
+	{
+		if ( context == NULL )
+		{
+			std::cerr << "Critical Error: Pisk SBP driver imu_raw context void." << std::endl;
+			return;
+		}
+
+		class PIKSI *driver = (class PIKSI*) context;
+
+		msg_imu_raw_t sbp_imu = *(msg_imu_raw_t*) msg;
+
+    	sensor_msgs::ImuPtr imu_msg( new sensor_msgs::Imu );
+
+        imu_msg->header.frame_id = driver->frame_id;
+        imu_msg->header.stamp = ros::Time::now( );
+
+        // Convert from g to m/s^2
+        imu_msg->linear_acceleration.x = sbp_imu.acc_x*9.80665;
+        imu_msg->linear_acceleration.y = sbp_imu.acc_y*9.80665;
+        imu_msg->linear_acceleration.z = sbp_imu.acc_z*9.80665;
+
+        // Convert from deg/s to rad/s
+        imu_msg->angular_velocity.x = sbp_imu.gyr_x*180/M_PI;
+        imu_msg->angular_velocity.y = sbp_imu.gyr_y*180/M_PI;
+        imu_msg->angular_velocity.z = sbp_imu.gyr_z*180/M_PI;
+
+        driver->imu_pub.publish( imu_msg );
+
+		return;
+	}
+
+	void mag_raw_callback(u16 sender_id, u8 len, u8 msg[], void *context)
+	{
+		if ( context == NULL )
+		{
+			std::cerr << "Critical Error: Pisk SBP driver mag_raw context void." << std::endl;
+			return;
+		}
+
+		class PIKSI *driver = (class PIKSI*) context;
+
+		msg_mag_raw_t sbp_mag = *(msg_mag_raw_t*) msg;
+
+    	sensor_msgs::MagneticFieldPtr mag_msg( new sensor_msgs::MagneticField );
+
+        mag_msg->header.frame_id = driver->frame_id;
+        mag_msg->header.stamp = ros::Time::now( );
+
+        // Assuming that the sbp_mag message is in T
+        mag_msg->magnetic_field.x = sbp_mag.mag_x;
+        mag_msg->magnetic_field.y = sbp_mag.mag_y;
+        mag_msg->magnetic_field.z = sbp_mag.mag_z;
+
+        driver->mag_pub.publish( mag_msg );
 
 		return;
 	}
